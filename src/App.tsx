@@ -1,14 +1,7 @@
-import React from "react";
-import { ThemeProvider } from "./components/theme/themProvider";
+import Chat from "./pages/Chat";
 
-function App({ children }: { children?: React.ReactNode }) {
-  return (
-    <>
-      <ThemeProvider defaultTheme="dark" storageKey="vite-ui-theme">
-        {children}
-      </ThemeProvider>
-    </>
-  );
+function App() {
+  return <Chat />;
 }
 
 export default App;
