@@ -1,0 +1,44 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Senior Developer's Development Guidelines (React, Vite, TypeScript)
+
+These guidelines outline the core principles and practices to be followed when implementing new features, making changes, or optimizing code in our React, Vite, and TypeScript project. Adhering to these rules ensures code quality, maintainability, and consistency across the codebase.
+
+## 1. Core Implementation & Structure
+
+*   **Define Components with `const`:** All new components **must** be defined using a `const` variable assigned an arrow function (e.g., `const MyComponent = (props) => { ... }`).
+*   **Functional Components & Hooks:** Components will be functional components utilizing React Hooks.
+*   **Component Granularity:** Keep components small and focused on a single responsibility.
+*   **Logical Organization:** Place new files and folders in logical directories (`components`, `pages`, `hooks`, `utils`, `types`, etc.) or within a feature-based structure if applicable.
+*   **Project Structure Check:** **Before** adding or changing files, I will thoroughly review the existing project structure to ensure the new additions fit logically and maintain consistency.
+
+## 2. Language & Typescript
+
+*   **Strict TypeScript:** Leverage `strict: true` in `tsconfig.json`. All TypeScript errors **must** be resolved.
+*   **Explicit Typing:** Component props, function parameters/returns, and state variables **must** be explicitly typed.
+*   **Avoid `any`:** The use of `any` is **strongly discouraged**. Define specific types or use `unknown` with type guards.
+
+## 3. Code Quality & Maintainability
+
+*   **Use Hooks Effectively:** Custom hooks **should** be created to encapsulate shared or complex logic. These custom hooks **must** be placed within the `src/hooks` folder. The rules of hooks **must** always be followed (called at the top level, from functional components or custom hooks).
+*   **Readability & Clarity:** Write code that is easy to read and understand. Use descriptive names.
+*   **Consistent Styling:** Adhere to the chosen styling method (CSS Modules, styled-components, etc.) and maintain consistency.
+*   **Linter & Formatter:** Ensure code conforms to ESLint and Prettier rules.
+*   **Meaningful Commit Messages:** Write clear and concise commit messages describing the changes.
+
+## 4. Data & State Management
+
+*   **Intentional State:** Choose the appropriate state management approach (`useState`, `useContext`, or a library) based on complexity and maintainability.
+*   **Schema Management:** When adding or modifying database schemas or columns, the changes **must** be reflected by editing the `schema.sql` file in the root directory of the project. If this file does not exist, it will be created.
+
+## 5. API Interactions
+
+*   **Separate API Operations:** All API request functions (GET, POST, PUT, DELETE, etc.) for distinct resources or endpoints **must** be separated and organized within the `src/services/api` folder.
+
+## 6. Performance & Optimization
+
+*   **Mindful Rendering:** Be aware of unnecessary re-renders and use `React.memo`, `useMemo`, or `useCallback` judiciously when performance is impacted.
+*   **Leverage Vite:** Utilize Vite's features (HMR, optimized builds) for efficiency.
