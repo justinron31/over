@@ -21,7 +21,6 @@ export default function Chat() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header with user info and sign out */}
       <header className="border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex justify-between items-center">
@@ -53,7 +52,7 @@ export default function Chat() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="bg-card text-card-foreground shadow rounded-lg p-6">
           <h1 className="text-2xl font-bold mb-4">Chat</h1>
-          {/* Add your chat implementation here */}
+
           <p className="text-muted-foreground">Chat content will go here...</p>
         </div>
       </main>
