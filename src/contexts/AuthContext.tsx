@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { Session, User } from "@supabase/supabase-js";
-import { supabase } from "../services/supabase/supabase";
+import { supabase, supabaseAdmin } from "../services/supabase/supabase";
 
 interface AuthContextType {
   signUpNewUser: (
@@ -21,6 +21,7 @@ interface AuthContextType {
   }>;
   session: Session | null;
   signOut: () => Promise<void>;
+  deleteAccount: () => Promise<{ success: boolean; error?: string }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -59,12 +60,9 @@ export const AuthContextProvider: React.FC<AuthContextProviderProps> = ({
 
       // Handle Supabase error explicitly
       if (error) {
-        console.error("Sign-in error:", error.message);
         return { success: false, error: error.message };
       }
 
-      // If no error, return success
-      console.log("Sign-in success:", data);
       return { success: true, data };
     } catch (err) {
       // Handle unexpected issues
@@ -102,9 +100,75 @@ export const AuthContextProvider: React.FC<AuthContextProviderProps> = ({
     }
   };
 
+  // Delete account
+  const deleteAccount = async () => {
+    if (!session?.user) {
+      return { success: false, error: "No user session found" };
+    }
+
+    try {
+      // First verify the user exists
+      const { data: profile, error: profileCheckError } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("id", session.user.id)
+        .single();
+
+      if (profileCheckError || !profile) {
+        console.error("Profile check error:", profileCheckError);
+        return { success: false, error: "User profile not found" };
+      }
+
+      // Call our database function to delete user data first
+      const { data: deleteData, error: deleteDataError } = await supabase.rpc(
+        "delete_user_data",
+        {
+          input_user_id: session.user.id,
+        }
+      );
+
+      if (deleteDataError || (deleteData && !deleteData.success)) {
+        console.error(
+          "Error deleting user data:",
+          deleteDataError || deleteData?.message
+        );
+        throw new Error(
+          deleteDataError?.message ||
+            deleteData?.message ||
+            "Failed to delete user data"
+        );
+      }
+
+      // Delete the actual auth user using the admin client
+      const { error: deleteAuthError } =
+        await supabaseAdmin.auth.admin.deleteUser(session.user.id);
+
+      if (deleteAuthError) {
+        console.error("Error deleting auth user:", deleteAuthError);
+        return {
+          success: false,
+          error: "Failed to delete account completely",
+        };
+      }
+
+      // Sign out after successful deletion
+      await signOut();
+      return { success: true };
+    } catch (error) {
+      console.error("Error deleting account:", error);
+      return {
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to delete account. Please try again.",
+      };
+    }
+  };
+
   return (
     <AuthContext.Provider
-      value={{ signUpNewUser, signInUser, session, signOut }}
+      value={{ signUpNewUser, signInUser, session, signOut, deleteAccount }}
     >
       {children}
     </AuthContext.Provider>

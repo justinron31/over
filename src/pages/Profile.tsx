@@ -13,6 +13,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { ArrowLeft, Pencil, Eye, EyeOff, Check, X, Camera } from "lucide-react";
 import { toast } from "sonner";
@@ -23,16 +24,21 @@ interface Profile {
   username: string;
   avatar_url: string | null;
   last_username_update: string | null;
+  bio: string;
 }
 
 export default function Profile() {
   const navigate = useNavigate();
-  const { session } = UserAuth();
+  const { session, deleteAccount } = UserAuth();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [isEditingBio, setIsEditingBio] = useState(false);
   const [newUsername, setNewUsername] = useState("");
+  const [newBio, setNewBio] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   // Password change states
   const [currentPassword, setCurrentPassword] = useState("");
@@ -77,13 +83,14 @@ export default function Profile() {
       try {
         const { data, error } = await supabase
           .from("profiles")
-          .select("username, avatar_url, last_username_update")
+          .select("username, avatar_url, last_username_update, bio")
           .eq("id", session.user.id)
           .single();
 
         if (error) throw error;
         setProfile(data);
         setNewUsername(data.username);
+        setNewBio(data.bio || "");
       } catch (error) {
         console.error("Error fetching profile:", error);
         toast.error("Failed to load profile");
@@ -291,6 +298,53 @@ export default function Profile() {
     }
   };
 
+  const handleBioUpdate = async () => {
+    setLoading(true);
+    try {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ bio: newBio })
+        .eq("id", session?.user.id);
+
+      if (error) throw error;
+
+      setProfile((prev) =>
+        prev
+          ? {
+              ...prev,
+              bio: newBio,
+            }
+          : null
+      );
+      setIsEditingBio(false);
+      toast.success("Bio updated successfully");
+    } catch (error) {
+      console.error("Error updating bio:", error);
+      toast.error("Failed to update bio");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    setDeleteLoading(true);
+    try {
+      const { success, error } = await deleteAccount();
+      if (success) {
+        toast.success("Account deleted successfully");
+        navigate("/login");
+      } else {
+        throw new Error(error);
+      }
+    } catch (error) {
+      console.error("Error deleting account:", error);
+      toast.error("Failed to delete account");
+    } finally {
+      setDeleteLoading(false);
+      setShowDeleteDialog(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background p-4 sm:p-8">
       <div className="max-w-2xl mx-auto">
@@ -398,16 +452,95 @@ export default function Profile() {
                     </p>
                   </div>
 
+                  <div className="space-y-2">
+                    <Label>Bio</Label>
+                    <div className="flex items-start gap-2">
+                      {isEditingBio ? (
+                        <div className="flex w-full flex-col gap-2">
+                          <textarea
+                            value={newBio}
+                            onChange={(e) => setNewBio(e.target.value)}
+                            placeholder="Tell us about yourself..."
+                            className="min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                            maxLength={500}
+                          />
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              onClick={handleBioUpdate}
+                              disabled={loading}
+                            >
+                              Save
+                            </Button>
+                            <Button
+                              variant="outline"
+                              onClick={() => {
+                                setIsEditingBio(false);
+                                setNewBio(profile.bio || "");
+                              }}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            {500 - newBio.length} characters remaining
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="flex justify-center w-full flex-col ">
+                          <div className="flex items-start justify-between">
+                            <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+                              {profile.bio ||
+                                "No bio yet. Click edit to add one!"}
+                            </p>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              onClick={() => setIsEditingBio(true)}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
                   <Button
                     onClick={() => setShowPasswordDialog(true)}
                     variant="outline"
-                    className="w-full"
+                    className="w-full mt-5"
                   >
                     Change Password
                   </Button>
                 </div>
               </div>
             )}
+          </CardContent>
+        </Card>
+
+        <Card className="mb-6">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle>Danger Zone</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="rounded-lg border border-destructive p-4">
+                <h3 className="text-lg font-semibold text-destructive">
+                  Delete Account
+                </h3>
+                <p className="text-sm text-muted-foreground mt-2">
+                  Once you delete your account, there is no going back. Please
+                  be certain.
+                </p>
+                <Button
+                  variant="destructive"
+                  className="mt-4"
+                  onClick={() => setShowDeleteDialog(true)}
+                >
+                  Delete Account
+                </Button>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
@@ -565,6 +698,55 @@ export default function Profile() {
                 </Button>
               </div>
             </form>
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete Account Dialog */}
+        <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle className="text-destructive">
+                Delete Account
+              </DialogTitle>
+              <DialogDescription>
+                This action cannot be undone. This will permanently delete your
+                account and remove your data from our servers.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <p className="text-sm font-medium">
+                The following data will be deleted:
+              </p>
+              <ul className="list-disc list-inside text-sm text-muted-foreground space-y-2">
+                <li>Your profile information</li>
+                <li>All your messages</li>
+                <li>Your chat history</li>
+                <li>Your account credentials</li>
+              </ul>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setShowDeleteDialog(false)}
+                disabled={deleteLoading}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleDeleteAccount}
+                disabled={deleteLoading}
+              >
+                {deleteLoading ? (
+                  <div className="flex items-center gap-2">
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-background border-t-transparent"></div>
+                    Deleting...
+                  </div>
+                ) : (
+                  "Delete Account"
+                )}
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       </div>

@@ -7,6 +7,7 @@ import ResetPassword from "../pages/ResetPassword.tsx";
 
 import NotFoundPage from "../pages/NotFoundPage.tsx";
 import Chat from "../pages/Chat.tsx";
+import ChatRoom from "../pages/ChatRoom.tsx";
 import Onboarding from "../pages/Onboarding.tsx";
 import Profile from "../pages/Profile.tsx";
 import ProtectedRoute from "./ProtectedRoute.tsx";
@@ -55,6 +56,14 @@ export const router = createBrowserRouter([
         element: (
           <ProtectedRoute>
             <Chat />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "/chat/:userId",
+        element: (
+          <ProtectedRoute>
+            <ChatRoom />
           </ProtectedRoute>
         ),
       },
