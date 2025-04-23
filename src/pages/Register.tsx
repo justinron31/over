@@ -38,6 +38,7 @@ export default function Register() {
   const [focusedInput, setFocusedInput] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [emailTouched, setEmailTouched] = useState(false);
 
   const { signUpNewUser } = UserAuth();
 
@@ -130,10 +131,29 @@ export default function Register() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   onFocus={() => setFocusedInput("email")}
-                  onBlur={() => setFocusedInput(null)}
+                  onBlur={() => {
+                    setFocusedInput(null);
+                    setEmailTouched(true);
+
+                    if (email) {
+                      try {
+                        z.string().email().parse(email);
+                        const emailErrors = { ...validationErrors };
+                        delete emailErrors.email;
+                        setValidationErrors(emailErrors);
+                      } catch (error) {
+                        if (error instanceof z.ZodError) {
+                          setValidationErrors((prev) => ({
+                            ...prev,
+                            email: "Please enter a valid email address",
+                          }));
+                        }
+                      }
+                    }
+                  }}
                   required
                 />
-                {focusedInput === "email" && validationErrors.email && (
+                {emailTouched && email && validationErrors.email && (
                   <p className="text-sm text-red-500">
                     {validationErrors.email}
                   </p>
@@ -158,6 +178,7 @@ export default function Register() {
                     size="icon"
                     className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
                     onClick={() => setShowPassword(!showPassword)}
+                    onMouseDown={(e) => e.preventDefault()}
                   >
                     {showPassword ? (
                       <EyeOff className="h-4 w-4" />
@@ -209,6 +230,7 @@ export default function Register() {
                     size="icon"
                     className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
                     onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    onMouseDown={(e) => e.preventDefault()}
                   >
                     {showConfirmPassword ? (
                       <EyeOff className="h-4 w-4" />
