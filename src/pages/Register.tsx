@@ -134,7 +134,7 @@ export default function Register() {
                   onBlur={() => {
                     setFocusedInput(null);
                     setEmailTouched(true);
-                    // Only validate email on blur if there's a value
+
                     if (email) {
                       try {
                         z.string().email().parse(email);
