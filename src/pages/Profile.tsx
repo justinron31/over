@@ -21,10 +21,10 @@ import { z } from "zod";
 import { registerSchema } from "@/lib/validations/auth";
 
 interface Profile {
-  username: string;
+  username: string | null;
   avatar_url: string | null;
   last_username_update: string | null;
-  bio: string;
+  bio: string | null;
 }
 
 export default function Profile() {
@@ -88,9 +88,10 @@ export default function Profile() {
           .single();
 
         if (error) throw error;
-        setProfile(data);
-        setNewUsername(data.username);
-        setNewBio(data.bio || "");
+
+        setProfile(data as unknown as Profile);
+        setNewUsername((data as unknown as Profile).username || "");
+        setNewBio((data as unknown as Profile).bio || "");
       } catch (error) {
         console.error("Error fetching profile:", error);
         toast.error("Failed to load profile");
@@ -100,7 +101,9 @@ export default function Profile() {
     fetchProfile();
   }, [session, navigate]);
 
-  const getInitials = (username: string) => {
+  const getInitials = (username: string | null) => {
+    if (!username) return "U";
+
     return username
       .split(/[-_\s]/)
       .map((word) => word[0])
@@ -135,25 +138,29 @@ export default function Profile() {
 
     setLoading(true);
     try {
-      const { error: usernameExistsError } = await supabase
+      // Check if username already exists
+      const { data: existingUser, error: checkError } = await supabase
         .from("profiles")
         .select("username")
         .eq("username", newUsername)
-        .single();
+        .maybeSingle();
 
-      if (!usernameExistsError) {
+      if (checkError) throw checkError;
+
+      if (existingUser) {
         toast.error("Username is already taken");
         setLoading(false);
         return;
       }
 
+      // Update the username
       const { error } = await supabase
         .from("profiles")
         .update({
           username: newUsername,
           last_username_update: new Date().toISOString(),
         })
-        .eq("id", session?.user.id);
+        .eq("id", session?.user?.id || "");
 
       if (error) throw error;
 
@@ -279,7 +286,7 @@ export default function Profile() {
             .update({
               avatar_url: publicUrl,
             })
-            .eq("id", session?.user?.id);
+            .eq("id", session?.user?.id || "");
 
           if (updateError) throw updateError;
 
@@ -304,7 +311,7 @@ export default function Profile() {
       const { error } = await supabase
         .from("profiles")
         .update({ bio: newBio })
-        .eq("id", session?.user.id);
+        .eq("id", session?.user?.id || "");
 
       if (error) throw error;
 
@@ -410,7 +417,7 @@ export default function Profile() {
                             variant="outline"
                             onClick={() => {
                               setIsEditing(false);
-                              setNewUsername(profile.username);
+                              setNewUsername(profile.username || "");
                             }}
                           >
                             Cancel
@@ -419,7 +426,7 @@ export default function Profile() {
                       ) : (
                         <div className="flex w-full items-center justify-between">
                           <span className="text-xl font-semibold">
-                            {profile.username}
+                            {profile.username || "Set username"}
                           </span>
                           <Button
                             variant="outline"
@@ -437,6 +444,11 @@ export default function Profile() {
                         </div>
                       )}
                     </div>
+                    {!profile.username && (
+                      <p className="text-sm text-amber-500">
+                        Please set a username to complete your profile
+                      </p>
+                    )}
                     {!canUpdateUsername() && (
                       <p className="text-sm text-muted-foreground">
                         You can update your username again in{" "}
