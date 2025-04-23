@@ -97,9 +97,9 @@ export default function Chat() {
             <div className="flex items-center space-x-4">
               <ModeToggle />
               <Button
-                variant="outline"
+                variant="secondary"
                 onClick={() => setShowSignOutDialog(true)}
-                className="text-sm bg-violet-600 hover:bg-violet-700"
+                className="text-sm hover:bg-violet-600 hover:text-white transition-colors"
               >
                 Sign Out
               </Button>
