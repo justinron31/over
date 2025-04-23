@@ -9,9 +9,11 @@ interface ResetPasswordRouteProps {
 const ResetPasswordRoute = ({ children }: ResetPasswordRouteProps) => {
   const { session } = UserAuth();
   const location = useLocation();
+  const searchParams = new URLSearchParams(location.search);
 
   // Check if we have a recovery token in the URL
-  const hasRecoveryToken = location.hash.includes("type=recovery");
+  const hasRecoveryToken =
+    searchParams.get("type") === "recovery" && searchParams.get("token_hash");
 
   // If no recovery token and no session, redirect to login
   if (!hasRecoveryToken && !session) {
