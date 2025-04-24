@@ -42,6 +42,9 @@ export default function ChatRoom() {
   const prevScrollHeightRef = useRef<number>(0);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const directChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(
+    null
+  );
   // Track if we're currently editing for real-time conflict resolution
   const currentEditingMessageIdRef = useRef<string | null>(null);
 
@@ -135,15 +138,37 @@ export default function ChatRoom() {
   // Enhanced send message with toast
   const handleSendMessage = useCallback(
     async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!newMessage.trim() || !session?.user?.id || !userId) return;
+
+      const content = newMessage.trim();
+      setNewMessage("");
+
       try {
+        const messageId = crypto.randomUUID();
+        const timestamp = new Date().toISOString();
+
+        if (directChannelRef.current) {
+          directChannelRef.current.send({
+            type: "broadcast",
+            event: "message",
+            payload: {
+              message_id: messageId,
+              content: content,
+              sender_id: session.user.id,
+              receiver_id: userId,
+              created_at: timestamp,
+            },
+          });
+        }
+
         await hookSendMessage(e);
-        // No need for success toast on normal message sending as it's visually obvious
       } catch (error) {
         console.error("Error sending message:", error);
         toast.error("Failed to send message");
       }
     },
-    [hookSendMessage]
+    [hookSendMessage, newMessage, session?.user?.id, userId, setNewMessage]
   );
 
   // Memoize navigation to avoid unnecessary rerenders
@@ -205,6 +230,8 @@ export default function ChatRoom() {
         deleted_by: newMessage.deleted_by || null,
       };
 
+      console.log("Adding new message to chat room state:", messageObj);
+
       // Add to message list if not already there
       setMessages((prevMessages: Message[]) => {
         // Check if message already exists
@@ -244,6 +271,8 @@ export default function ChatRoom() {
           }
         }
       }
+
+      console.log("Updating existing message in chat room:", updatedMessage);
 
       setMessages((prevMessages: Message[]) => {
         // Find the message in the current state
@@ -291,6 +320,8 @@ export default function ChatRoom() {
         toast.info("This message was deleted");
       }
 
+      console.log("Deleting message from chat room:", deletedMessageId);
+
       setMessages((prevMessages: Message[]) => {
         // Check if message exists in our state
         const messageIndex = prevMessages.findIndex(
@@ -310,83 +341,42 @@ export default function ChatRoom() {
     [setMessages, setEditingMessage, setEditContent]
   );
 
-  // Set up dedicated realtime channel for this chat room
-  const setupChatRoomChannel = useCallback(() => {
+  // Set up direct channel for faster real-time updates
+  const setupDirectMessagesChannel = useCallback(() => {
     if (!session?.user?.id || !userId) return;
 
-    // Clean up any existing channel
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
+    if (directChannelRef.current) {
+      supabase.removeChannel(directChannelRef.current);
+      directChannelRef.current = null;
     }
 
-    // Create a channel for all message-related events
-    const channel = supabase.channel(`chat_room_${session.user.id}_${userId}`, {
-      config: {
-        broadcast: { ack: true, self: true }, // Enable self-broadcast
-      },
-    });
-
-    // Set up subscription for new messages
-    channel
-      // Listen for insert events for messages in this conversation
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `(sender_id=eq.${session.user.id} AND receiver_id=eq.${userId}) OR (sender_id=eq.${userId} AND receiver_id=eq.${session.user.id})`,
-        },
-        (payload) => {
-          console.log("New message detected in chat room:", payload);
-          handleNewMessage(payload.new as MessagePayload);
-        }
-      )
-      // Listen for update events for messages in this conversation
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "messages",
-          filter: `(sender_id=eq.${session.user.id} AND receiver_id=eq.${userId}) OR (sender_id=eq.${userId} AND receiver_id=eq.${session.user.id})`,
-        },
-        (payload) => {
-          console.log("Message updated in chat room:", payload);
-          handleMessageUpdate(payload.new as MessagePayload);
-        }
-      )
-      // Listen for delete events for messages in this conversation
-      .on(
-        "postgres_changes",
-        {
-          event: "DELETE",
-          schema: "public",
-          table: "messages",
-          filter: `(sender_id=eq.${session.user.id} AND receiver_id=eq.${userId}) OR (sender_id=eq.${userId} AND receiver_id=eq.${session.user.id})`,
-        },
-        (payload) => {
-          console.log("Message deleted in chat room:", payload);
-          if (payload.old && payload.old.id) {
-            handleMessageDelete(payload.old.id as string);
-          }
-        }
-      )
-      .subscribe((status) => {
-        console.log(`Chat room realtime channel status: ${status}`);
-        if (status === "CHANNEL_ERROR") {
-          console.error("Failed to subscribe to chat room updates");
-          // Try to reconnect after a delay
-          setTimeout(() => {
-            if (channelRef.current === channel) {
-              channel.subscribe();
+    try {
+      const directChannel = supabase
+        .channel("global_messages_direct")
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "messages",
+            filter: `(sender_id=eq.${session.user.id} AND receiver_id=eq.${userId}) OR (sender_id=eq.${userId} AND receiver_id=eq.${session.user.id})`,
+          },
+          (payload) => {
+            if (payload.eventType === "INSERT") {
+              handleNewMessage(payload.new as MessagePayload);
+            } else if (payload.eventType === "UPDATE") {
+              handleMessageUpdate(payload.new as MessagePayload);
+            } else if (payload.eventType === "DELETE" && payload.old) {
+              handleMessageDelete(payload.old.id as string);
             }
-          }, 3000);
-        }
-      });
+          }
+        )
+        .subscribe();
 
-    channelRef.current = channel;
+      directChannelRef.current = directChannel;
+    } catch (error) {
+      console.error("Error setting up direct messages channel:", error);
+    }
   }, [
     session?.user?.id,
     userId,
@@ -394,6 +384,115 @@ export default function ChatRoom() {
     handleMessageUpdate,
     handleMessageDelete,
   ]);
+
+  // Set up dedicated realtime channel for this chat room
+  const setupChatRoomChannel = useCallback(() => {
+    if (!session?.user?.id || !userId) return;
+
+    if (channelRef.current) {
+      supabase.removeChannel(channelRef.current);
+      channelRef.current = null;
+    }
+
+    const channelName = `chat_room_${session.user.id}_${userId}_${Date.now()}`;
+
+    try {
+      const channel = supabase.channel(channelName, {
+        config: {
+          broadcast: { ack: true, self: true },
+          presence: { key: session.user.id },
+        },
+      });
+
+      channel.on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "messages",
+          filter: `(sender_id=eq.${session.user.id} AND receiver_id=eq.${userId}) OR (sender_id=eq.${userId} AND receiver_id=eq.${session.user.id})`,
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT") {
+            handleNewMessage(payload.new as MessagePayload);
+          } else if (payload.eventType === "UPDATE") {
+            handleMessageUpdate(payload.new as MessagePayload);
+          } else if (payload.eventType === "DELETE" && payload.old) {
+            handleMessageDelete(payload.old.id as string);
+          }
+        }
+      );
+
+      channel.subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          channel.track({
+            user_id: session.user.id,
+            online_at: new Date().toISOString(),
+          });
+        } else if (status === "CHANNEL_ERROR") {
+          const reconnectDelay = Math.min(3000 * (Math.random() + 1), 8000);
+          setTimeout(() => {
+            if (channelRef.current === channel) {
+              channel.subscribe();
+            }
+          }, reconnectDelay);
+        }
+      });
+
+      channelRef.current = channel;
+    } catch (error) {
+      console.error("Error setting up chat room channel:", error);
+    }
+  }, [
+    session?.user?.id,
+    userId,
+    handleNewMessage,
+    handleMessageUpdate,
+    handleMessageDelete,
+  ]);
+
+  // Add a global real-time listener for instant updates
+  const setupDirectBroadcastChannel = useCallback(() => {
+    if (!session?.user?.id || !userId) return;
+
+    if (directChannelRef.current) {
+      supabase.removeChannel(directChannelRef.current);
+      directChannelRef.current = null;
+    }
+
+    try {
+      const directChannel = supabase
+        .channel(`direct-broadcast-${Date.now()}`)
+        .on("broadcast", { event: "message" }, (payload) => {
+          if (
+            (payload.sender_id === session.user.id &&
+              payload.receiver_id === userId) ||
+            (payload.sender_id === userId &&
+              payload.receiver_id === session.user.id)
+          ) {
+            const messageObj: MessagePayload = {
+              id: payload.message_id,
+              content: payload.content,
+              sender_id: payload.sender_id,
+              receiver_id: payload.receiver_id,
+              created_at: payload.created_at,
+              read_at: null,
+              deleted_at: null,
+              edited_at: null,
+              original_content: null,
+              deleted_by: null,
+            };
+
+            handleNewMessage(messageObj);
+          }
+        })
+        .subscribe();
+
+      directChannelRef.current = directChannel;
+    } catch (error) {
+      console.error("Error setting up direct broadcast channel:", error);
+    }
+  }, [session?.user?.id, userId, handleNewMessage]);
 
   useEffect(() => {
     if (!session?.user || !userId) {
@@ -430,6 +529,12 @@ export default function ChatRoom() {
     // Set up chat room channel
     setupChatRoomChannel();
 
+    // Set up direct messages channel for faster updates
+    setupDirectMessagesChannel();
+
+    // Set up direct broadcast channel for instant updates
+    setupDirectBroadcastChannel();
+
     // Handle visibility change to mark messages as read when user returns to tab
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
@@ -456,6 +561,12 @@ export default function ChatRoom() {
         channelRef.current = null;
       }
 
+      // Clean up direct channel
+      if (directChannelRef.current) {
+        supabase.removeChannel(directChannelRef.current);
+        directChannelRef.current = null;
+      }
+
       // Reset editing state
       currentEditingMessageIdRef.current = null;
     };
@@ -464,6 +575,8 @@ export default function ChatRoom() {
     userId,
     navigate,
     setupChatRoomChannel,
+    setupDirectMessagesChannel,
+    setupDirectBroadcastChannel,
     setEditingMessage,
     setEditContent,
   ]);
@@ -530,7 +643,7 @@ export default function ChatRoom() {
     }
   }, [isLoading, messages.length]);
 
-  // Add a polling mechanism to ensure messages stay in sync
+  // Add a polling mechanism with reduced frequency to ensure messages stay in sync
   useEffect(() => {
     // Only set up polling if we have the necessary IDs and messages are loaded
     if (session?.user?.id && userId && !isLoading && otherUser) {
@@ -540,13 +653,13 @@ export default function ChatRoom() {
         pollingIntervalRef.current = null;
       }
 
-      // Set up a polling interval to fetch new messages
+      // Set up a polling interval to fetch new messages as a fallback
       const interval = setInterval(() => {
         // Check if we should poll (only when not fetching data)
         if (!isLoadingMore && stableFunctions.current.fetchLatestMessages) {
           stableFunctions.current.fetchLatestMessages();
         }
-      }, 2000); // Poll every 2 seconds
+      }, 5000); // Poll every 5 seconds (reduced from 2s since we have better real-time now)
 
       pollingIntervalRef.current = interval;
 
@@ -565,6 +678,42 @@ export default function ChatRoom() {
       }
     };
   }, [session?.user?.id, userId, isLoading, otherUser, isLoadingMore]);
+
+  // Add channel health check
+  useEffect(() => {
+    if (!session?.user?.id || !userId) return;
+
+    const channelHealthCheck = setInterval(() => {
+      if (!channelRef.current) {
+        setupChatRoomChannel();
+      }
+
+      if (!directChannelRef.current) {
+        setupDirectMessagesChannel();
+      }
+
+      try {
+        if (channelRef.current) {
+          channelRef.current.track({
+            user_id: session.user.id,
+            online_at: new Date().toISOString(),
+          });
+        }
+      } catch (error) {
+        console.error("Error updating presence, reconnecting channel:", error);
+        setupChatRoomChannel();
+      }
+    }, 20000);
+
+    return () => {
+      clearInterval(channelHealthCheck);
+    };
+  }, [
+    session?.user?.id,
+    userId,
+    setupChatRoomChannel,
+    setupDirectMessagesChannel,
+  ]);
 
   // Show loading state
   if (isLoading && !isLoadAttempted) {

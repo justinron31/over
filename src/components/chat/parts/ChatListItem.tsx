@@ -98,25 +98,18 @@ const ChatListItemComponent = ({
   );
 };
 
-// Use memo to prevent unnecessary rerenders
+// Use memo to prevent unnecessary rerenders, but ensure it's responsive to real-time updates
 export const ChatListItem = memo(
   ChatListItemComponent,
   (prevProps, nextProps) => {
-    // Check if the chat data has actually changed
-    const prevChat = prevProps.chat;
-    const nextChat = nextProps.chat;
-
-    // Return true if we should NOT rerender
+    // Check if any essential properties have changed
     return (
-      prevChat.profile.id === nextChat.profile.id &&
-      prevChat.profile.username === nextChat.profile.username &&
-      prevChat.profile.avatar_url === nextChat.profile.avatar_url &&
-      prevChat.last_message.content === nextChat.last_message.content &&
-      prevChat.last_message.created_at === nextChat.last_message.created_at &&
-      prevChat.last_message.deleted === nextChat.last_message.deleted &&
-      prevChat.last_message.is_read === nextChat.last_message.is_read &&
-      prevChat.last_message.is_sender === nextChat.last_message.is_sender &&
-      prevChat.unread_count === nextChat.unread_count
+      prevProps.chat.profile.id === nextProps.chat.profile.id &&
+      prevProps.chat.last_message.created_at ===
+        nextProps.chat.last_message.created_at &&
+      prevProps.chat.last_message.content ===
+        nextProps.chat.last_message.content &&
+      prevProps.chat.unread_count === nextProps.chat.unread_count
     );
   }
 );

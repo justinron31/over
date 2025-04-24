@@ -26,16 +26,26 @@ export const PresenceProvider = ({
 
     try {
       const timestamp = new Date().toISOString();
-      await supabase.from("user_presence").upsert(
-        {
-          user_id: userId,
-          last_seen: timestamp,
-        },
-        {
-          onConflict: "user_id",
-          ignoreDuplicates: false,
-        }
-      );
+
+      // First check if the record exists
+      const { data: existingRecord } = await supabase
+        .from("user_presence")
+        .select("user_id")
+        .eq("user_id", userId)
+        .single();
+
+      if (existingRecord) {
+        // Update existing record
+        await supabase
+          .from("user_presence")
+          .update({ last_seen: timestamp })
+          .eq("user_id", userId);
+      } else {
+        // Insert new record
+        await supabase
+          .from("user_presence")
+          .insert({ user_id: userId, last_seen: timestamp });
+      }
 
       // Update local state immediately for faster UI response
       setLastSeen((prev) => ({

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect, useRef } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { UserAuth, usePresence } from "@/contexts";
 import { toast } from "sonner";
@@ -16,11 +16,13 @@ import { Profile } from "@/types/chat";
 
 export default function Chat() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { session, signOut } = UserAuth();
   const { isUserOnline, getLastSeen } = usePresence();
   const [showSignOutDialog, setShowSignOutDialog] = useState(false);
   const [showSearchDialog, setShowSearchDialog] = useState(false);
   const [showUserProfile, setShowUserProfile] = useState(false);
+  const hasProcessedInitialUnread = useRef(false);
 
   const {
     profile,
@@ -31,7 +33,40 @@ export default function Chat() {
     fetchUserProfile,
     filterText,
     setFilterText,
+    markChatAsRead,
+    checkAndResetUnreadCounts,
   } = useChatList({ userId: session?.user?.id });
+
+  useEffect(() => {
+    if (
+      location.pathname === "/chat" &&
+      recentChats.length > 0 &&
+      !isLoadingChats &&
+      !hasProcessedInitialUnread.current
+    ) {
+      const hasUnreadMessages = recentChats.some(
+        (chat) => chat.unread_count > 0
+      );
+
+      if (hasUnreadMessages) {
+        checkAndResetUnreadCounts();
+        hasProcessedInitialUnread.current = true;
+      } else {
+        hasProcessedInitialUnread.current = true;
+      }
+    }
+  }, [
+    location.pathname,
+    checkAndResetUnreadCounts,
+    recentChats,
+    isLoadingChats,
+  ]);
+
+  useEffect(() => {
+    if (location.pathname !== "/chat") {
+      hasProcessedInitialUnread.current = false;
+    }
+  }, [location.pathname]);
 
   const handleSignOut = async () => {
     try {
@@ -50,7 +85,6 @@ export default function Chat() {
       return;
     }
 
-    // Direct navigation to chat room instead of showing profile first
     navigate(`/chat/${user.id}`);
     setShowSearchDialog(false);
   };
@@ -116,7 +150,10 @@ export default function Chat() {
                       key={chat.profile.id}
                       chat={chat}
                       isUserOnline={isUserOnline}
-                      onClick={() => navigate(`/chat/${chat.profile.id}`)}
+                      onClick={() => {
+                        markChatAsRead(chat.profile.id);
+                        navigate(`/chat/${chat.profile.id}`);
+                      }}
                       onProfileClick={() => {
                         fetchUserProfile(chat.profile.id);
                         setShowUserProfile(true);

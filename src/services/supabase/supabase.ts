@@ -38,6 +38,10 @@ function getSupabaseClient() {
       },
     },
     global: {
+      headers: {
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
       fetch: (...args) => {
         // Implement a custom fetch with retry logic for network errors
         return limitConcurrentRequests(() => customFetchWithRetry(...args));
@@ -120,6 +124,23 @@ async function customFetchWithRetry(
     lastRequestTime = Date.now();
 
     const response = await fetch(input, init);
+
+    // Log request details if there's an error
+    if (!response.ok && response.status >= 400) {
+      console.error(
+        `Request failed: ${response.status} ${response.statusText}`
+      );
+      console.error(
+        `URL: ${input instanceof Request ? input.url : input.toString()}`
+      );
+
+      if (response.status === 403) {
+        console.warn(
+          "Authentication issue - verify you're signed in and have proper permissions"
+        );
+      }
+    }
+
     // If the request was successful, return the response
     return response;
   } catch (err) {

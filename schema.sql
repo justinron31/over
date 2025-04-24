@@ -180,6 +180,13 @@ CREATE POLICY "Users can update own presence"
     FOR UPDATE
     USING (auth.uid() = user_id);
 
+-- Add this new policy to allow users to insert or update their presence records
+CREATE POLICY "Users can upsert their own presence data"
+    ON public.user_presence
+    FOR UPDATE
+    USING (auth.uid() = user_id)
+    WITH CHECK (auth.uid() = user_id);
+
 -- Enable realtime for user_presence
 ALTER PUBLICATION supabase_realtime ADD TABLE public.user_presence;
 
@@ -260,38 +267,50 @@ RETURNS TABLE (
 BEGIN
   RETURN QUERY
   WITH latest_messages AS (
-    SELECT DISTINCT ON (
+    SELECT DISTINCT ON (other_id)
       CASE
-        WHEN m.sender_id = user_id THEN m.receiver_id
-        ELSE m.sender_id
-      END
-    )
-      CASE
-        WHEN m.sender_id = user_id THEN m.receiver_id
-        ELSE m.sender_id
-      END AS other_user_id,
-      m.content,
-      m.created_at AS last_message_time,
-      m.read_at,
-      m.deleted_at,
-      m.sender_id = user_id AS is_sender
-    FROM messages m
-    WHERE m.sender_id = user_id OR m.receiver_id = user_id
-    ORDER BY other_user_id, last_message_time DESC
+        WHEN msg.sender_id = user_id THEN msg.receiver_id
+        ELSE msg.sender_id
+      END AS other_id,
+      msg.content,
+      msg.created_at AS last_message_time,
+      msg.read_at,
+      msg.deleted_at,
+      msg.sender_id = user_id AS is_sender,
+      (
+        SELECT MAX(last_read.read_at)
+        FROM messages last_read
+        WHERE
+          last_read.receiver_id = user_id
+          AND last_read.sender_id = CASE
+            WHEN msg.sender_id = user_id THEN msg.receiver_id
+            ELSE msg.sender_id
+          END
+      ) as latest_read_at
+    FROM messages msg
+    WHERE msg.sender_id = user_id OR msg.receiver_id = user_id
+    ORDER BY
+      other_id,
+      msg.created_at DESC
   ),
   unread_counts AS (
     SELECT
-      m.sender_id AS other_user_id,
+      unread.sender_id AS other_user_id,
       COUNT(*) AS unread_count
-    FROM messages m
+    FROM messages unread
+    LEFT JOIN latest_messages lm ON unread.sender_id = lm.other_id
     WHERE
-      m.receiver_id = user_id
-      AND m.read_at IS NULL
-      AND m.deleted_at IS NULL
-    GROUP BY m.sender_id
+      unread.receiver_id = user_id
+      AND unread.read_at IS NULL
+      AND unread.deleted_at IS NULL
+      AND (
+        lm.latest_read_at IS NULL
+        OR unread.created_at > lm.latest_read_at
+      )
+    GROUP BY unread.sender_id
   )
   SELECT
-    lm.other_user_id,
+    lm.other_id AS other_user_id,
     lm.content,
     lm.last_message_time,
     lm.read_at,
@@ -299,7 +318,7 @@ BEGIN
     lm.is_sender,
     COALESCE(uc.unread_count, 0) AS unread_count
   FROM latest_messages lm
-  LEFT JOIN unread_counts uc ON lm.other_user_id = uc.other_user_id
+  LEFT JOIN unread_counts uc ON lm.other_id = uc.other_user_id
   ORDER BY lm.last_message_time DESC;
 END;
 $$ LANGUAGE plpgsql;

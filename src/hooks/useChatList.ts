@@ -30,6 +30,8 @@ export function useChatList({ userId }: UseChatListProps) {
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const lastUpdateTimeRef = useRef<number>(0);
   const updateDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const isProcessingUnreadRef = useRef<boolean>(false);
+  const processedChatsRef = useRef<Set<string>>(new Set());
 
   const fetchProfile = useCallback(async () => {
     if (!userId) return;
@@ -178,33 +180,27 @@ export function useChatList({ userId }: UseChatListProps) {
         : messageData.sender_id;
 
       setRecentChats((prevChats) => {
-        // Check if there's already a chat with this user
         const existingChatIndex = prevChats.findIndex(
           (chat) => chat.profile.id === otherUserId
         );
 
-        // Create a new message object
         const newLastMessage = {
           content: messageData.content,
           created_at: messageData.created_at,
-          is_read: isFromCurrentUser, // Current user's messages are considered read
+          is_read: isFromCurrentUser,
           is_sender: isFromCurrentUser,
           deleted: !!messageData.deleted_at,
         };
 
-        // If there's an existing chat, update it
         if (existingChatIndex !== -1) {
           const updatedChats = [...prevChats];
           const chatToUpdate = { ...updatedChats[existingChatIndex] };
 
-          // Update the last message
           chatToUpdate.last_message = newLastMessage;
 
-          // If this is a message FROM someone else TO the current user, increment unread count
           if (!isFromCurrentUser) {
             chatToUpdate.unread_count = (chatToUpdate.unread_count || 0) + 1;
 
-            // Show a toast notification for new incoming messages
             if (
               document.visibilityState !== "visible" &&
               chatToUpdate.profile.username
@@ -220,116 +216,245 @@ export function useChatList({ userId }: UseChatListProps) {
 
           updatedChats[existingChatIndex] = chatToUpdate;
 
-          // Move this chat to the top
           const [chatToMove] = updatedChats.splice(existingChatIndex, 1);
           return [chatToMove, ...updatedChats];
         }
 
-        // If we don't have the profile info for this user yet, we'll do a full refetch
-        // This ensures we have all the data needed for a new chat entry
-        debouncedFetchChats();
+        setTimeout(() => {
+          fetchRecentChats();
+        }, 0);
+
         return prevChats;
       });
     },
-    [debouncedFetchChats]
+    [fetchRecentChats]
   );
 
-  // Function to update chat list with an edited message
-  const updateChatListWithEditedMessage = useCallback(
-    (messageData: MessagePayload, isFromCurrentUser: boolean) => {
-      const otherUserId = isFromCurrentUser
-        ? messageData.receiver_id
-        : messageData.sender_id;
+  // Function to mark a chat as read
+  const markChatAsRead = useCallback(
+    async (profileId: string) => {
+      if (!userId || !profileId) return;
 
-      setRecentChats((prevChats) => {
-        // Check if there's already a chat with this user
-        const existingChatIndex = prevChats.findIndex(
-          (chat) => chat.profile.id === otherUserId
+      const chatToUpdate = recentChats.find(
+        (chat) => chat.profile.id === profileId
+      );
+
+      if (!chatToUpdate) {
+        return;
+      }
+
+      if (!chatToUpdate.unread_count) {
+        return;
+      }
+
+      try {
+        setRecentChats((prevChats) =>
+          prevChats.map((chat) =>
+            chat.profile.id === profileId ? { ...chat, unread_count: 0 } : chat
+          )
         );
 
-        // If we don't have a chat with this user, ignore the update
-        if (existingChatIndex === -1) return prevChats;
+        const { error } = await supabase
+          .from("messages")
+          .update({ read_at: new Date().toISOString() })
+          .eq("receiver_id", userId)
+          .eq("sender_id", profileId)
+          .is("read_at", null);
 
-        // Check if this edited message is the most recent one in the chat
-        const chat = prevChats[existingChatIndex];
-
-        // Only update if timestamps match (meaning this is the last message)
-        // Convert to Date objects for comparison to handle slight format differences
-        const editedMessageDate = new Date(messageData.created_at).getTime();
-        const lastMessageDate = new Date(
-          chat.last_message.created_at
-        ).getTime();
-
-        // If the difference is less than 1 second, consider it the same message
-        // This handles slight timestamp differences between DB and client
-        if (Math.abs(editedMessageDate - lastMessageDate) > 1000) {
-          return prevChats;
-        }
-
-        // Update the last message with edited content
-        const updatedChats = [...prevChats];
-        updatedChats[existingChatIndex] = {
-          ...chat,
-          last_message: {
-            ...chat.last_message,
-            content: messageData.content,
-            deleted: !!messageData.deleted_at,
-          },
-        };
-
-        return updatedChats;
-      });
+        if (error) throw error;
+      } catch (error) {
+        console.error("Error marking chat as read:", error);
+        toast.error("Failed to mark messages as read");
+      }
     },
-    []
+    [userId, recentChats]
   );
 
-  // Function to update chat list with a deleted message
-  const updateChatListWithDeletedMessage = useCallback(
-    (messageData: MessagePayload, isFromCurrentUser: boolean) => {
-      const otherUserId = isFromCurrentUser
-        ? messageData.receiver_id
-        : messageData.sender_id;
+  // Function to check and update all chats with unread messages
+  const checkAndResetUnreadCounts = useCallback(() => {
+    if (!userId || isProcessingUnreadRef.current) return;
 
-      setRecentChats((prevChats) => {
-        // Check if there's already a chat with this user
-        const existingChatIndex = prevChats.findIndex(
-          (chat) => chat.profile.id === otherUserId
+    // Get chats with unread messages that we haven't processed yet
+    const unreadChats = recentChats.filter(
+      (chat) =>
+        chat.unread_count > 0 && !processedChatsRef.current.has(chat.profile.id)
+    );
+
+    if (unreadChats.length === 0) {
+      return;
+    }
+
+    isProcessingUnreadRef.current = true;
+
+    // Update all chats in one database operation
+    const markAllAsRead = async () => {
+      try {
+        const timestamp = new Date().toISOString();
+        const senderIds = unreadChats.map((chat) => chat.profile.id);
+
+        // Track these chats as processed
+        senderIds.forEach((id) => processedChatsRef.current.add(id));
+
+        // Mark all unread messages as read in a single query
+        const { error } = await supabase
+          .from("messages")
+          .update({ read_at: timestamp })
+          .eq("receiver_id", userId)
+          .is("read_at", null)
+          .is("deleted_at", null)
+          .in("sender_id", senderIds);
+
+        if (error) {
+          throw error;
+        }
+
+        // Update local state
+        setRecentChats((prevChats) => {
+          return prevChats.map((chat) => {
+            if (chat.unread_count > 0 && senderIds.includes(chat.profile.id)) {
+              return {
+                ...chat,
+                unread_count: 0,
+                last_message: {
+                  ...chat.last_message,
+                  is_read: true,
+                },
+              };
+            }
+            return chat;
+          });
+        });
+
+        isProcessingUnreadRef.current = false;
+      } catch (error) {
+        console.error("Error in bulk update:", error);
+        // Fall back to individual updates through markChatAsRead
+        isProcessingUnreadRef.current = false;
+        // Remove from processed set on error
+        unreadChats.forEach((chat) =>
+          processedChatsRef.current.delete(chat.profile.id)
         );
+      }
+    };
 
-        // If we don't have a chat with this user, ignore the update
-        if (existingChatIndex === -1) return prevChats;
+    markAllAsRead();
+  }, [userId, recentChats]);
 
-        // Check if this deleted message is the most recent one in the chat
-        const chat = prevChats[existingChatIndex];
+  // Reset the processed chats when we receive new chat data
+  useEffect(() => {
+    processedChatsRef.current = new Set();
+  }, [recentChats.length]);
 
-        // Only update if timestamps match (meaning this is the last message)
-        // Convert to Date objects for comparison to handle slight format differences
-        const deletedMessageDate = new Date(messageData.created_at).getTime();
-        const lastMessageDate = new Date(
-          chat.last_message.created_at
-        ).getTime();
+  // Function to set up the real-time channel
+  const setupRealtimeSubscription = useCallback(() => {
+    if (!userId) return;
 
-        // If the difference is less than 1 second, consider it the same message
-        if (Math.abs(deletedMessageDate - lastMessageDate) > 1000) {
-          return prevChats;
-        }
+    if (channelRef.current) {
+      supabase.removeChannel(channelRef.current);
+      channelRef.current = null;
+    }
 
-        // Update the last message to show it's deleted
-        const updatedChats = [...prevChats];
-        updatedChats[existingChatIndex] = {
-          ...chat,
-          last_message: {
-            ...chat.last_message,
-            deleted: true,
-            content: "(Message deleted)",
+    try {
+      const channel = supabase
+        .channel(`chat_list_${userId}_${Date.now()}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "messages",
+            filter: `sender_id=eq.${userId}`,
           },
-        };
+          (payload) => {
+            updateChatListWithMessage(payload.new as MessagePayload, true);
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "messages",
+            filter: `receiver_id=eq.${userId}`,
+          },
+          (payload) => {
+            updateChatListWithMessage(payload.new as MessagePayload, false);
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "messages",
+            filter: `sender_id=eq.${userId}`,
+          },
+          (payload) => {
+            const updatedMessage = payload.new as MessagePayload;
+            if (updatedMessage.deleted_at || updatedMessage.edited_at) {
+              debouncedFetchChats();
+            }
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "messages",
+            filter: `receiver_id=eq.${userId}`,
+          },
+          (payload) => {
+            const updatedMessage = payload.new as MessagePayload;
+            if (updatedMessage.deleted_at || updatedMessage.edited_at) {
+              debouncedFetchChats();
+            }
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "DELETE",
+            schema: "public",
+            table: "messages",
+            filter: `sender_id=eq.${userId}`,
+          },
+          () => {
+            debouncedFetchChats();
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "DELETE",
+            schema: "public",
+            table: "messages",
+            filter: `receiver_id=eq.${userId}`,
+          },
+          () => {
+            debouncedFetchChats();
+          }
+        )
+        .subscribe((status) => {
+          if (status === "SUBSCRIBED") {
+            channel.track({
+              user_id: userId,
+              online_at: new Date().toISOString(),
+            });
+          } else if (status === "CHANNEL_ERROR") {
+            setTimeout(() => {
+              if (channelRef.current === channel) {
+                channel.subscribe();
+              }
+            }, 5000);
+          }
+        });
 
-        return updatedChats;
-      });
-    },
-    []
-  );
+      channelRef.current = channel;
+    } catch (error) {
+      console.error("Error setting up chat list subscription:", error);
+    }
+  }, [userId, updateChatListWithMessage, debouncedFetchChats]);
 
   useEffect(() => {
     fetchProfile();
@@ -341,169 +466,38 @@ export function useChatList({ userId }: UseChatListProps) {
     // Initial fetch
     fetchRecentChats();
 
-    // Clean up any existing subscription
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
-    }
+    // Set up the real-time channel
+    setupRealtimeSubscription();
 
-    // Clean up any pending debounced fetch
-    if (updateDebounceRef.current) {
-      clearTimeout(updateDebounceRef.current);
-      updateDebounceRef.current = null;
-    }
+    // Add a heartbeat interval to keep the connection alive
+    const heartbeatInterval = setInterval(() => {
+      if (channelRef.current) {
+        try {
+          // Send a presence update to keep the connection active
+          channelRef.current.track({
+            user_id: userId,
+            online_at: new Date().toISOString(),
+          });
+        } catch (error) {
+          console.error("Error in chat list heartbeat, reconnecting:", error);
 
-    // Create a channel for all message-related events
-    const channel = supabase.channel(`chat_list_${userId}`, {
-      config: {
-        broadcast: { ack: true, self: true }, // Enable self-broadcast
-      },
-    });
-    channelRef.current = channel;
-
-    // Set up subscription for new messages
-    channel
-      // Listen for messages sent by the current user
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `sender_id=eq.${userId}`,
-        },
-        (payload) => {
-          console.log("New sent message detected:", payload);
-          // Update chat list optimistically with the new message
-          updateChatListWithMessage(payload.new as MessagePayload, true);
-        }
-      )
-      // Listen for messages received by the current user
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `receiver_id=eq.${userId}`,
-        },
-        (payload) => {
-          console.log("New received message detected:", payload);
-          // Update chat list optimistically with the new message
-          updateChatListWithMessage(payload.new as MessagePayload, false);
-        }
-      )
-      // Listen for updates to messages sent by the current user
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "messages",
-          filter: `sender_id=eq.${userId}`,
-        },
-        (payload) => {
-          console.log("Sent message update detected:", payload);
-
-          // Check if this is an edit or a soft delete
-          const updatedMessage = payload.new as MessagePayload;
-
-          if (updatedMessage.deleted_at) {
-            // Handle soft delete
-            updateChatListWithDeletedMessage(updatedMessage, true);
-          } else if (updatedMessage.edited_at) {
-            // Handle edit
-            updateChatListWithEditedMessage(updatedMessage, true);
-          } else {
-            // Other updates (like read status) - use standard update
-            debouncedFetchChats();
+          // Clean up and create a new channel
+          if (channelRef.current) {
+            supabase.removeChannel(channelRef.current);
+            channelRef.current = null;
           }
-        }
-      )
-      // Listen for updates to messages received by the current user
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "messages",
-          filter: `receiver_id=eq.${userId}`,
-        },
-        (payload) => {
-          console.log("Received message update detected:", payload);
 
-          // Check if this is an edit or a soft delete
-          const updatedMessage = payload.new as MessagePayload;
-
-          if (updatedMessage.deleted_at) {
-            // Handle soft delete
-            updateChatListWithDeletedMessage(updatedMessage, false);
-          } else if (updatedMessage.edited_at) {
-            // Handle edit
-            updateChatListWithEditedMessage(updatedMessage, false);
-          } else {
-            // Show a notification if a message was marked as read
-            if (
-              payload.new &&
-              payload.new.read_at &&
-              !payload.old.read_at &&
-              payload.new.sender_id === userId
-            ) {
-              // Optional: You could show a subtle toast here that message was read
-              // toast.info("Message read", { duration: 1000 });
-            }
-            debouncedFetchChats();
-          }
+          // Fetch the latest data and reconnect
+          fetchRecentChats();
+          setupRealtimeSubscription();
         }
-      )
-      // Listen for deletion of messages sent by the current user
-      .on(
-        "postgres_changes",
-        {
-          event: "DELETE",
-          schema: "public",
-          table: "messages",
-          filter: `sender_id=eq.${userId}`,
-        },
-        (payload) => {
-          console.log("Sent message deletion detected:", payload);
-          // Handle hard delete (though we're using soft deletes)
-          updateChatListWithDeletedMessage(payload.old as MessagePayload, true);
-        }
-      )
-      // Listen for deletion of messages received by the current user
-      .on(
-        "postgres_changes",
-        {
-          event: "DELETE",
-          schema: "public",
-          table: "messages",
-          filter: `receiver_id=eq.${userId}`,
-        },
-        (payload) => {
-          console.log("Received message deletion detected:", payload);
-          // Handle hard delete (though we're using soft deletes)
-          updateChatListWithDeletedMessage(
-            payload.old as MessagePayload,
-            false
-          );
-        }
-      )
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") {
-          console.log("Successfully subscribed to chat list updates");
-        } else if (status === "CHANNEL_ERROR") {
-          console.error("Failed to subscribe to chat list updates");
-          // Try to reconnect after a delay
-          setTimeout(() => {
-            if (channelRef.current === channel) {
-              channel.subscribe();
-            }
-          }, 3000);
-        }
-      });
+      }
+    }, 25000); // Check every 25 seconds
 
     return () => {
+      // Clear heartbeat interval
+      clearInterval(heartbeatInterval);
+
       // Clean up subscription
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
@@ -516,14 +510,22 @@ export function useChatList({ userId }: UseChatListProps) {
         updateDebounceRef.current = null;
       }
     };
-  }, [
-    userId,
-    fetchRecentChats,
-    debouncedFetchChats,
-    updateChatListWithMessage,
-    updateChatListWithEditedMessage,
-    updateChatListWithDeletedMessage,
-  ]);
+  }, [userId, fetchRecentChats, setupRealtimeSubscription]);
+
+  // Add periodic background refresh to ensure chat list stays in sync
+  useEffect(() => {
+    if (!userId) return;
+
+    // Set up a timer to periodically refresh the chat list
+    const refreshTimer = setInterval(() => {
+      console.log("Performing background refresh of chat list");
+      fetchRecentChats();
+    }, 60000); // Every 60 seconds
+
+    return () => {
+      clearInterval(refreshTimer);
+    };
+  }, [userId, fetchRecentChats]);
 
   // Filter chats based on search text
   const filteredChats = recentChats.filter((chat) =>
@@ -540,5 +542,7 @@ export function useChatList({ userId }: UseChatListProps) {
     fetchUserProfile,
     filterText,
     setFilterText,
+    markChatAsRead,
+    checkAndResetUnreadCounts,
   };
 }
