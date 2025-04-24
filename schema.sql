@@ -43,9 +43,17 @@ CREATE TABLE IF NOT EXISTS profiles (
 );
 
 --* Create storage bucket for avatars*
-INSERT INTO storage.buckets (id, name, public)
-VALUES ('avatars', 'avatars', true)
-ON CONFLICT (id) DO NOTHING;
+INSERT INTO storage.buckets (id, name, public, file_size_limit)
+VALUES (
+    'avatars',
+    'avatars',
+    true,
+    '5242880' -- 5MB in bytes
+)
+ON CONFLICT (id) DO UPDATE
+SET
+    public = true,
+    file_size_limit = '5242880';
 
 --* Set up Row Level Security (RLS)*
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
@@ -88,18 +96,26 @@ CREATE TRIGGER on_auth_user_created
     FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
 
 --* Storage policies for avatar uploads*
+DROP POLICY IF EXISTS "Avatar images are publicly accessible." ON storage.objects;
+DROP POLICY IF EXISTS "Anyone can upload an avatar." ON storage.objects;
+DROP POLICY IF EXISTS "Users can update their own avatar." ON storage.objects;
+
+-- Create more flexible policies for avatar storage
 CREATE POLICY "Avatar images are publicly accessible."
     ON storage.objects FOR SELECT
     USING (bucket_id = 'avatars');
 
-CREATE POLICY "Anyone can upload an avatar."
+CREATE POLICY "Users can upload avatars."
     ON storage.objects FOR INSERT
-    WITH CHECK (bucket_id = 'avatars');
+    WITH CHECK (bucket_id = 'avatars' AND auth.uid() = (storage.foldername(name))[1]::uuid);
 
--- Fixed policy with explicit type casting for owner column
-CREATE POLICY "Users can update their own avatar."
+CREATE POLICY "Users can update their own avatars."
     ON storage.objects FOR UPDATE
-    USING (bucket_id = 'avatars' AND (owner)::uuid = auth.uid());
+    USING (bucket_id = 'avatars' AND auth.uid() = (storage.foldername(name))[1]::uuid);
+
+CREATE POLICY "Users can delete their own avatars."
+    ON storage.objects FOR DELETE
+    USING (bucket_id = 'avatars' AND auth.uid() = (storage.foldername(name))[1]::uuid);
 
 -- Create messages table
 CREATE TABLE IF NOT EXISTS messages (
