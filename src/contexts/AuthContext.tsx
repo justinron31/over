@@ -2,6 +2,11 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { Session, User } from "@supabase/supabase-js";
 import { supabase, supabaseAdmin } from "../services/supabase/supabase";
 
+interface DeleteUserDataResponse {
+  success: boolean;
+  message?: string;
+}
+
 interface AuthContextType {
   signUpNewUser: (
     email: string,
@@ -120,12 +125,13 @@ export const AuthContextProvider: React.FC<AuthContextProviderProps> = ({
       }
 
       // Call our database function to delete user data first
-      const { data: deleteData, error: deleteDataError } = await supabase.rpc(
+      const { data, error: deleteDataError } = await supabase.rpc(
         "delete_user_data",
         {
           input_user_id: session.user.id,
         }
       );
+      const deleteData = data as DeleteUserDataResponse;
 
       if (deleteDataError || (deleteData && !deleteData.success)) {
         console.error(
