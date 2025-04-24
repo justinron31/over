@@ -265,26 +265,44 @@ export default function Profile() {
       try {
         setLoading(true);
 
-        // Upload the new avatar
         const fileExt = file.name.split(".").pop();
         const fileName = `${session?.user?.id}-${Math.random()}.${fileExt}`;
 
+        // Read the file as an ArrayBuffer
+        const fileBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as ArrayBuffer);
+          reader.onerror = reject;
+          reader.readAsArrayBuffer(file);
+        });
+
+        // Upload the file as binary data
         const { error: uploadError, data } = await supabase.storage
           .from("avatars")
-          .upload(fileName, file);
+          .upload(`${session?.user?.id}/${fileName}`, fileBuffer, {
+            contentType: file.type,
+            upsert: false,
+          });
 
-        if (uploadError) throw uploadError;
+        if (uploadError) {
+          console.error("Upload error:", uploadError);
+          throw uploadError;
+        }
 
         if (data) {
+          // Get the public URL
           const {
             data: { publicUrl },
-          } = supabase.storage.from("avatars").getPublicUrl(data.path);
+          } = supabase.storage
+            .from("avatars")
+            .getPublicUrl(`${session?.user?.id}/${fileName}`);
 
           // Update profile with new avatar URL
           const { error: updateError } = await supabase
             .from("profiles")
             .update({
               avatar_url: publicUrl,
+              updated_at: new Date().toISOString(),
             })
             .eq("id", session?.user?.id || "");
 

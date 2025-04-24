@@ -122,20 +122,46 @@ const Onboarding = () => {
 
       // Upload avatar if selected
       if (avatar) {
-        const fileExt = avatar.name.split(".").pop();
-        const fileName = `${session.user.id}-${Math.random()}.${fileExt}`;
+        try {
+          const fileExt = avatar.name.split(".").pop();
+          const fileName = `${session.user.id}-${Math.random()}.${fileExt}`;
 
-        const { error: uploadError, data } = await supabase.storage
-          .from("avatars")
-          .upload(fileName, avatar);
+          // Read the file as an ArrayBuffer
+          const fileBuffer = await new Promise<ArrayBuffer>(
+            (resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result as ArrayBuffer);
+              reader.onerror = reject;
+              reader.readAsArrayBuffer(avatar);
+            }
+          );
 
-        if (uploadError) throw uploadError;
+          // Upload the file as binary data
+          const { error: uploadError, data } = await supabase.storage
+            .from("avatars")
+            .upload(`${session.user.id}/${fileName}`, fileBuffer, {
+              contentType: avatar.type,
+              upsert: false,
+            });
 
-        if (data) {
-          const {
-            data: { publicUrl },
-          } = supabase.storage.from("avatars").getPublicUrl(data.path);
-          avatarUrl = publicUrl;
+          if (uploadError) {
+            console.error("Upload error:", uploadError);
+            throw uploadError;
+          }
+
+          if (data) {
+            // Get the public URL
+            const {
+              data: { publicUrl },
+            } = supabase.storage
+              .from("avatars")
+              .getPublicUrl(`${session.user.id}/${fileName}`);
+
+            avatarUrl = publicUrl;
+          }
+        } catch (error) {
+          console.error("Avatar upload error:", error);
+          throw new Error("Failed to upload avatar");
         }
       }
 
