@@ -34,15 +34,24 @@ const Onboarding = () => {
         return;
       }
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("username")
-        .eq("id", session.user.id)
-        .single();
+      try {
+        const { data: profile, error } = await supabase
+          .from("profiles")
+          .select("username")
+          .eq("id", session.user.id)
+          .single();
 
-      // If username exists, user has completed onboarding
-      if (profile?.username) {
-        navigate("/chat");
+        if (error) {
+          console.error("Error checking profile:", error);
+          return;
+        }
+
+        // If username exists and is not null, user has completed onboarding
+        if (profile && profile.username) {
+          navigate("/chat");
+        }
+      } catch (err) {
+        console.error("Error during profile check:", err);
       }
     };
 
@@ -135,11 +144,15 @@ const Onboarding = () => {
         .from("profiles")
         .update({
           username,
+          updated_at: new Date().toISOString(),
           ...(avatarUrl && { avatar_url: avatarUrl }),
         })
         .eq("id", session.user.id);
 
-      if (updateError) throw updateError;
+      if (updateError) {
+        console.error("Profile update error:", updateError);
+        throw new Error("Failed to update profile. Please try again.");
+      }
 
       toast.success("Profile setup complete!");
       navigate("/chat");

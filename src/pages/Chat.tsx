@@ -1,51 +1,72 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect, useRef } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { UserAuth } from "@/contexts/AuthContext";
-import { ModeToggle } from "@/components/theme/themeToggle";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { supabase } from "@/services/supabase/supabase";
+import { UserAuth, usePresence } from "@/contexts";
 import { toast } from "sonner";
-
-interface Profile {
-  username: string;
-  avatar_url: string | null;
-}
+import { Loader2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { useChatList } from "@/hooks/useChatList";
+import { ChatListHeader } from "@/components/chat/parts/ChatListHeader";
+import { ChatListItem } from "@/components/chat/parts/ChatListItem";
+import { EmptyChatList } from "@/components/chat/parts/EmptyChatList";
+import { UserSearchDialog } from "@/components/chat/parts/UserSearchDialog";
+import { UserProfileViewDialog } from "@/components/chat/parts/UserProfileViewDialog";
+import { SignOutDialog } from "@/components/chat/parts/SignOutDialog";
+import { Profile } from "@/types/chat";
 
 export default function Chat() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { session, signOut } = UserAuth();
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const { isUserOnline, getLastSeen } = usePresence();
   const [showSignOutDialog, setShowSignOutDialog] = useState(false);
+  const [showSearchDialog, setShowSearchDialog] = useState(false);
+  const [showUserProfile, setShowUserProfile] = useState(false);
+  const hasProcessedInitialUnread = useRef(false);
+
+  const {
+    profile,
+    recentChats,
+    isLoadingChats,
+    selectedUser,
+    isLoadingProfile,
+    fetchUserProfile,
+    filterText,
+    setFilterText,
+    markChatAsRead,
+    checkAndResetUnreadCounts,
+  } = useChatList({ userId: session?.user?.id });
 
   useEffect(() => {
-    const fetchProfile = async () => {
-      if (!session?.user) return;
+    if (
+      location.pathname === "/chat" &&
+      recentChats.length > 0 &&
+      !isLoadingChats &&
+      !hasProcessedInitialUnread.current
+    ) {
+      const hasUnreadMessages = recentChats.some(
+        (chat) => chat.unread_count > 0
+      );
 
-      try {
-        const { data, error } = await supabase
-          .from("profiles")
-          .select("username, avatar_url")
-          .eq("id", session.user.id)
-          .single();
-
-        if (error) throw error;
-        setProfile(data);
-      } catch (error) {
-        console.error("Error fetching profile:", error);
+      if (hasUnreadMessages) {
+        checkAndResetUnreadCounts();
+        hasProcessedInitialUnread.current = true;
+      } else {
+        hasProcessedInitialUnread.current = true;
       }
-    };
+    }
+  }, [
+    location.pathname,
+    checkAndResetUnreadCounts,
+    recentChats,
+    isLoadingChats,
+  ]);
 
-    fetchProfile();
-  }, [session]);
+  useEffect(() => {
+    if (location.pathname !== "/chat") {
+      hasProcessedInitialUnread.current = false;
+    }
+  }, [location.pathname]);
 
   const handleSignOut = async () => {
     try {
@@ -58,92 +79,142 @@ export default function Chat() {
     }
   };
 
-  // Get initials from username for avatar fallback
-  const getInitials = (username: string) => {
-    return username
-      .split(/[-_\s]/)
-      .map((word) => word[0])
-      .join("")
-      .toUpperCase()
-      .slice(0, 2);
+  const handleUserSelect = (user: Profile) => {
+    if (!user || !user.id) {
+      toast.error("Invalid user selected");
+      return;
+    }
+
+    navigate(`/chat/${user.id}`);
+    setShowSearchDialog(false);
+  };
+
+  const handleStartChat = () => {
+    if (selectedUser) {
+      navigate(`/chat/${selectedUser.id}`);
+      setShowUserProfile(false);
+      setShowSearchDialog(false);
+    }
   };
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center space-x-4">
-              {profile && (
-                <button
-                  onClick={() => navigate("/profile")}
-                  className="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-accent transition-colors duration-200"
-                >
-                  <Avatar className="h-10 w-10 ring-2 ring-violet-500 ring-offset-2 ring-offset-background">
-                    <AvatarImage src={profile.avatar_url || undefined} />
-                    <AvatarFallback>
-                      {getInitials(profile.username)}
-                    </AvatarFallback>
-                  </Avatar>
-                  <span className="text-sm font-semibold flex items-center">
-                    <span className="bg-gradient-to-r from-violet-500 to-violet-700 bg-clip-text text-transparent mr-0.5">
-                      @
-                    </span>
-                    {profile.username}
-                  </span>
-                </button>
-              )}
-            </div>
-            <div className="flex items-center space-x-4">
-              <ModeToggle />
-              <Button
-                variant="secondary"
-                onClick={() => setShowSignOutDialog(true)}
-                className="text-sm hover:bg-violet-600 hover:text-white transition-colors"
-              >
-                Sign Out
-              </Button>
-            </div>
-          </div>
-        </div>
-      </header>
+      <ChatListHeader
+        profile={profile}
+        onSignOutClick={() => setShowSignOutDialog(true)}
+      />
 
       {/* Chat content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="bg-card text-card-foreground shadow rounded-lg p-6">
-          <h1 className="text-2xl font-bold mb-4">Chat</h1>
-          <p className="text-muted-foreground">In-Development bro...</p>
+        <div className="bg-card text-card-foreground shadow rounded-lg p-6 h-[80vh] relative">
+          <div className="flex flex-col h-full">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 sm:gap-6 mb-6">
+              <h1 className="text-2xl font-bold">Messages</h1>
+              <div className="w-full sm:w-1/2 lg:w-1/3">
+                <div className="relative">
+                  <Input
+                    type="text"
+                    value={filterText}
+                    onChange={(e) => setFilterText(e.target.value)}
+                    placeholder="Filter conversations..."
+                    className="w-full px-4 py-2 rounded-md border border-input bg-background text-sm focus-visible:ring-1 focus-visible:ring-violet-500 transition-shadow"
+                  />
+                  <svg
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                    />
+                  </svg>
+                </div>
+              </div>
+            </div>
+
+            {/* Recent Chats List */}
+            <div className="flex-1 overflow-y-auto">
+              {isLoadingChats ? (
+                <div className="flex items-center justify-center h-full">
+                  <Loader2 className="w-8 h-8 animate-spin text-violet-500" />
+                </div>
+              ) : recentChats.length > 0 ? (
+                <div className="space-y-2">
+                  {recentChats.map((chat) => (
+                    <ChatListItem
+                      key={chat.profile.id}
+                      chat={chat}
+                      isUserOnline={isUserOnline}
+                      onClick={() => {
+                        markChatAsRead(chat.profile.id);
+                        navigate(`/chat/${chat.profile.id}`);
+                      }}
+                      onProfileClick={() => {
+                        fetchUserProfile(chat.profile.id);
+                        setShowUserProfile(true);
+                      }}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <EmptyChatList />
+              )}
+            </div>
+
+            <Button
+              size="icon"
+              className="h-12 w-12 rounded-full absolute bottom-6 right-6 shadow-lg hover:shadow-xl transition-all bg-violet-600 hover:bg-violet-700 text-white"
+              onClick={() => setShowSearchDialog(true)}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={2.5}
+                stroke="currentColor"
+                className="w-6 h-6"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M12 4.5v15m7.5-7.5h-15"
+                />
+              </svg>
+            </Button>
+          </div>
         </div>
       </main>
 
-      <Dialog open={showSignOutDialog} onOpenChange={setShowSignOutDialog}>
-        <DialogContent className="sm:max-w-[425px]">
-          <DialogHeader>
-            <DialogTitle>Sign Out Confirmation</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to sign out? You will need to sign in again
-              to access your account.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="flex space-x-2 mt-4">
-            <Button
-              variant="outline"
-              onClick={() => setShowSignOutDialog(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                setShowSignOutDialog(false);
-                handleSignOut();
-              }}
-            >
-              Sign Out
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Dialogs */}
+      <UserSearchDialog
+        open={showSearchDialog}
+        onOpenChange={setShowSearchDialog}
+        currentUserId={session?.user?.id || ""}
+        isUserOnline={isUserOnline}
+        getLastSeen={getLastSeen}
+        onUserSelect={handleUserSelect}
+      />
+
+      <UserProfileViewDialog
+        open={showUserProfile}
+        onOpenChange={setShowUserProfile}
+        user={selectedUser}
+        isLoading={isLoadingProfile}
+        isUserOnline={isUserOnline}
+        getLastSeen={getLastSeen}
+        onStartChat={handleStartChat}
+      />
+
+      <SignOutDialog
+        open={showSignOutDialog}
+        onOpenChange={setShowSignOutDialog}
+        onConfirm={handleSignOut}
+      />
     </div>
   );
 }
